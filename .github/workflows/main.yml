@@ -1,0 +1,145 @@
+name: Remap astemirlib_re
+
+on:
+  workflow_dispatch:
+
+jobs:
+  remap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.8
+
+      - name: Comprobar jar
+        run: test -f input/astemirlib.jar || (echo "Falta input/astemirlib.jar" && exit 1)
+
+      - name: Crear proyecto Gradle
+        run: |
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  gradlePluginPortal()
+                  maven { url = 'https://maven.minecraftforge.net' }
+              }
+          }
+          rootProject.name = 'astemirlib-remap'
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'java'
+              id 'net.minecraftforge.gradle' version '[6.0.24,6.2)'
+          }
+          java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+          repositories {
+              mavenCentral()
+              maven { url = 'https://maven.minecraftforge.net' }
+          }
+          minecraft {
+              mappings channel: 'official', version: '1.20.1'
+          }
+          dependencies {
+              minecraft 'net.minecraftforge:forge:1.20.1-47.4.10'
+          }
+          tasks.register('repackJar', Jar) {
+              from(zipTree(file('input/astemirlib.jar'))) {
+                  exclude 'META-INF/MANIFEST.MF'
+              }
+              duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+              destinationDirectory = layout.buildDirectory.dir('libs')
+              archiveFileName = 'astemirlib_re-1.20.1-forge-1.2.97-REMAPPED.jar'
+              manifest {
+                  attributes(
+                      'Specification-Title': 'Astemir Re-Lib',
+                      'Specification-Vendor': 'Astemir',
+                      'Specification-Version': '1.2.97-SNAPSHOT',
+                      'Implementation-Title': 'forge',
+                      'Implementation-Version': '1.2.97-SNAPSHOT',
+                      'Implementation-Vendor': 'Astemir',
+                      'Built-On-Minecraft': '1.20.1',
+                      'MixinConfigs': 'astemirlib_re.common.mixins.json,astemirlib_re.client.mixins.json,astemirlib_re.forge.mixins.json'
+                  )
+              }
+          }
+          reobf {
+              create('repackJar')
+          }
+          EOF
+
+      - name: Reobfuscar (Mojmap a SRG)
+        run: gradle reobfRepackJar --no-daemon --stacktrace
+
+      - name: Parchar refmap (shadow flush)
+        run: |
+          cat > fix_refmap.py <<'EOF'
+          import glob, json, shutil, sys, zipfile
+          JAR = sys.argv[1]
+          P = 'com/astemir/astemirlib/re/client/mixin/'
+          EXTRA = [
+              (P + 'render/MixinGuiGraphics', 'flush',
+               'net/minecraft/client/gui/GuiGraphics', 'flush', '()V'),
+          ]
+          def load_tsrg():
+              best = {}
+              for f in glob.glob('build/**/*.tsrg', recursive=True):
+                  cls = None
+                  for line in open(f, encoding='utf8', errors='ignore'):
+                      p = line.split()
+                      if not p:
+                          continue
+                      if not line[0].isspace():
+                          cls = p[0]
+                      elif len(p) == 3 and p[1].startswith('('):
+                          best[(cls, p[0], p[1])] = p[2]
+                      elif len(p) == 2:
+                          best[(cls, p[0], None)] = p[1]
+              return best
+          tsrg = load_tsrg()
+          if not tsrg:
+              print('AVISO: no hay .tsrg en build/, no se parcheo el refmap'); sys.exit(0)
+          name = 'astemirlib_re.refmap.json'
+          zin = zipfile.ZipFile(JAR)
+          refmap = json.loads(zin.read(name))
+          changed = False
+          for mixin, shadow, target, moj, desc in EXTRA:
+              srg = tsrg.get((target, moj, desc))
+              if not srg:
+                  print('AVISO: no encontre', target, moj, desc); continue
+              value = 'L%s;%s%s' % (target, srg, desc)
+              sections = [refmap.get('mappings', {})]
+              for v in refmap.get('data', {}).values():
+                  sections.append(v.get('mappings', v) if isinstance(v, dict) else {})
+              for s in sections:
+                  s.setdefault(mixin, {})[shadow] = value
+              print('refmap:', shadow, '->', value); changed = True
+          if changed:
+              tmp = JAR + '.tmp'
+              with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
+                  for it in zin.infolist():
+                      data = json.dumps(refmap, indent=2).encode() if it.filename == name else zin.read(it.filename)
+                      zout.writestr(it, data)
+              zin.close(); shutil.move(tmp, JAR)
+          EOF
+          python3 fix_refmap.py build/libs/astemirlib_re-1.20.1-forge-1.2.97-REMAPPED.jar
+
+      - name: Verificar remapeo
+        run: |
+          python3 - <<'EOF'
+          import zipfile, re
+          z = zipfile.ZipFile('build/libs/astemirlib_re-1.20.1-forge-1.2.97-REMAPPED.jar')
+          n = sum(1 for i in z.namelist() if i.endswith('.class') and re.search(rb'm_\d{3,6}_', z.read(i)))
+          print('clases con nombres SRG:', n)
+          assert n > 0, 'El remapeo no se aplico'
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astemirlib_re-REMAPPED
+          path: build/libs/astemirlib_re-1.20.1-forge-1.2.97-REMAPPED.jar
