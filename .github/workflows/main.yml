@@ -19,7 +19,9 @@ jobs:
           gradle-version: 8.8
 
       - name: Comprobar jar
-        run: test -f input/astemirlib.jar || (echo "Falta input/astemirlib.jar" && exit 1)
+        run: |
+          ls -la input || echo "No existe la carpeta input"
+          test -f input/astemirlib.jar || (echo "Falta input/astemirlib.jar" && exit 1)
 
       - name: Crear proyecto Gradle
         run: |
