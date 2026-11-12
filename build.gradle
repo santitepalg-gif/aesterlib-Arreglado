@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+    id 'net.minecraftforge.gradle' version '[6.0.24,6.2)'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.minecraftforge.net' }
+}
+
+minecraft {
+    // Los nombres del jar son los oficiales de Mojang -> se traducen a SRG (los que usa Forge en el juego)
+    mappings channel: 'official', version: '1.20.1'
+}
+
+dependencies {
+    minecraft 'net.minecraftforge:forge:1.20.1-47.4.10'
+}
+
+// Reempaqueta el jar original tal cual (sin tocar nada) para que ForgeGradle lo pueda reobfuscar
+tasks.register('repackJar', Jar) {
+    from(zipTree(file('input/astemirlib.jar'))) {
+        exclude 'META-INF/MANIFEST.MF'
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    archiveFileName = 'astemirlib_re-1.20.1-forge-1.2.97-REMAPPED.jar'
+    manifest {
+        attributes(
+            'Specification-Title': 'Astemir Re-Lib',
+            'Specification-Vendor': 'Astemir',
+            'Specification-Version': '1.2.97-SNAPSHOT',
+            'Implementation-Title': 'forge',
+            'Implementation-Version': '1.2.97-SNAPSHOT',
+            'Implementation-Vendor': 'Astemir',
+            'Built-On-Minecraft': '1.20.1',
+            'MixinConfigs': 'astemirlib_re.common.mixins.json,astemirlib_re.client.mixins.json,astemirlib_re.forge.mixins.json'
+        )
+    }
+}
+
+// Crea la tarea reobfRepackJar (Mojmap -> SRG)
+reobf {
+    create('repackJar')
+}
